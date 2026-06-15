@@ -11,7 +11,7 @@ from typing import List, Optional
 
 from .config import Config, load_config
 from .pdf import render_pages
-from .sidecar import build_markdown, write_sidecar
+from .sidecar import build_markdown, move_to_resource, write_sidecar
 from .walker import Kind, WorkItem, walk
 
 
@@ -97,6 +97,8 @@ def process(
         try:
             pages = _ocr_item(item, client, on_page=on_page)
             write_sidecar(item.sidecar, build_markdown(item.path, pages))
+            # Only after the sidecar is safely written, tuck the original away.
+            move_to_resource(item.path)
             _result(f"✓ OCR  {rel} -> {item.sidecar.name}")
             stats.ocred += 1
         except Exception as exc:  # one bad file must not abort the run

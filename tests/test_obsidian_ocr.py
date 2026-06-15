@@ -145,11 +145,17 @@ def test_end_to_end_image_and_pdf(tmp_path):
 
     img_md = (tmp_path / "scan.png.md").read_text()
     assert "HELLO" in img_md
-    assert "![[scan.png]]" in img_md  # Obsidian embed of the original
+    assert "(<.scan.png-resources/scan.png>)" in img_md  # relative link to moved original
 
     pdf_md = (tmp_path / "doc.pdf.md").read_text()
     assert "HELLO" in pdf_md
-    assert "![[doc.pdf]]" in pdf_md
+    assert "(<.doc.pdf-resources/doc.pdf>)" in pdf_md
+
+    # Each original is moved into its own sibling .<name>-resources folder after success.
+    assert not (tmp_path / "scan.png").exists()
+    assert (tmp_path / ".scan.png-resources" / "scan.png").exists()
+    assert not (tmp_path / "doc.pdf").exists()
+    assert (tmp_path / ".doc.pdf-resources" / "doc.pdf").exists()
 
 
 def test_dry_run_writes_nothing(tmp_path):
@@ -168,4 +174,4 @@ def test_build_markdown_multipage_has_page_headers():
     md = build_markdown(Path("x/doc.pdf"), ["one", "two"])
     assert "## Page 1" in md and "## Page 2" in md
     assert md.startswith("---")  # frontmatter
-    assert "source: doc.pdf" in md
+    assert "source: .doc.pdf-resources/doc.pdf" in md
