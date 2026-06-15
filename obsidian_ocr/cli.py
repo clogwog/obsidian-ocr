@@ -34,6 +34,19 @@ def _ocr_item(item: WorkItem, client) -> List[str]:
     raise ValueError(f"not an OCR target: {item.path}")
 
 
+def _progress(msg: str) -> None:
+    """Write an in-progress line (no newline) that a later _result overwrites."""
+    # \r returns to column 0; \033[K clears to end of line for clean overwrites.
+    sys.stdout.write(f"\r\033[K{msg}")
+    sys.stdout.flush()
+
+
+def _result(msg: str) -> None:
+    """Overwrite the current progress line with a final result, then commit it."""
+    sys.stdout.write(f"\r\033[K{msg}\n")
+    sys.stdout.flush()
+
+
 def process(
     config: Config,
     client,
@@ -63,13 +76,15 @@ def process(
             stats.ocred += 1
             continue
 
+        # Feedback: announce the file, then overwrite the same line with the result.
+        _progress(f"… OCR  {rel}")
         try:
             pages = _ocr_item(item, client)
             write_sidecar(item.sidecar, build_markdown(item.path, pages))
-            print(f"OCR  {rel} -> {item.sidecar.name}")
+            _result(f"✓ OCR  {rel} -> {item.sidecar.name}")
             stats.ocred += 1
         except Exception as exc:  # one bad file must not abort the run
-            print(f"FAIL {rel}: {exc}", file=sys.stderr)
+            _result(f"✗ FAIL {rel}: {exc}")
             stats.failed.append(str(rel))
 
     return stats

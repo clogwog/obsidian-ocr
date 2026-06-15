@@ -21,12 +21,15 @@ If the sidecar already exists it is skipped (use `--force` to regenerate).
 ## Setup
 
 ```bash
-cd /workspace/temp
 python3 -m venv venv
 source venv/bin/activate
-pip install -r requirements.txt
+pip install -e .       # installs deps + the `obsidian-ocr` command
 cp .env.example .env   # then edit OBSIDIAN_BASE_DIR
 ```
+
+`pip install -e .` installs the package in editable mode and puts the `obsidian-ocr`
+console command on your `PATH`. If you only want the dependencies without the command,
+use `pip install -r requirements.txt` and run it as `python -m obsidian_ocr.cli` instead.
 
 No secrets live in the code — all configuration comes from the environment, so the repo is
 safe to publish.
