@@ -25,12 +25,23 @@ class Stats:
     failed: List[str] = field(default_factory=list)
 
 
-def _ocr_item(item: WorkItem, client) -> List[str]:
-    """Return the list of page texts for an OCR target."""
+def _ocr_item(item: WorkItem, client, on_page=None) -> List[str]:
+    """Return the list of page texts for an OCR target.
+
+    `on_page(page, total)` is called before each page is sent to the model so the
+    caller can show progress (PDFs can take a long time — one model call per page).
+    """
     if item.kind is Kind.IMAGE:
+        if on_page:
+            on_page(1, 1)
         return [client.ocr_image(item.path.read_bytes())]
     if item.kind is Kind.PDF:
-        return [client.ocr_image(png) for png in render_pages(item.path)]
+        texts = []
+        for page, total, png in render_pages(item.path):
+            if on_page:
+                on_page(page, total)
+            texts.append(client.ocr_image(png))
+        return texts
     raise ValueError(f"not an OCR target: {item.path}")
 
 
@@ -77,9 +88,14 @@ def process(
             continue
 
         # Feedback: announce the file, then overwrite the same line with the result.
+        # PDFs report per-page progress since each page is a separate model call.
+        def on_page(page, total, _rel=rel):
+            suffix = f" (page {page}/{total})" if total > 1 else ""
+            _progress(f"… OCR  {_rel}{suffix}")
+
         _progress(f"… OCR  {rel}")
         try:
-            pages = _ocr_item(item, client)
+            pages = _ocr_item(item, client, on_page=on_page)
             write_sidecar(item.sidecar, build_markdown(item.path, pages))
             _result(f"✓ OCR  {rel} -> {item.sidecar.name}")
             stats.ocred += 1
