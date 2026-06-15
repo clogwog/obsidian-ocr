@@ -12,29 +12,34 @@ next to it containing the OCR'd text — so Obsidian indexes and finds it.
 
 For `a/b/c/d/f.pdf`:
 
-1. It writes the OCR text to `a/b/c/d/f.pdf.md` — a **visible** markdown file (Obsidian
+1. **OCR text** is written to `a/b/c/d/f.pdf.md` — a **visible** markdown file (Obsidian
    hides dot-prefixed paths, so the `.md` itself is never dot-prefixed; that's what keeps
-   it searchable).
-2. On success, it moves the original into a per-file hidden folder beside the sidecar:
-   `a/b/c/d/.f.pdf-resources/f.pdf`. Each file gets its own `.<name>-resources/` folder,
-   so a note and its resources move together.
-3. The sidecar links to the moved original with a relative markdown link
-   `[f.pdf](<.f.pdf-resources/f.pdf>)`. Because the original now lives in a hidden folder,
-   a plain link (angle-bracketed to tolerate spaces) is used instead of an `![[ ]]` embed,
-   which Obsidian can't resolve from a hidden folder.
+   it searchable). PDFs get one `## Page N` section per page; pages with no detected text
+   show a `_(no text detected)_` placeholder.
+2. **Rendered page images** are saved into a **visible** per-file folder
+   `a/b/c/d/f.pdf-pages/page-1.png`, ... and embedded in the `.md` with `![[ ]]`. This is
+   what lets you *see* the content in Obsidian — even for scanned, text-less PDFs.
+   (Obsidian **cannot embed from a dot-folder**, which is why the page images go in a
+   non-dot folder.)
+3. **The pristine original** is moved into a per-file hidden folder
+   `a/b/c/d/.f.pdf-resources/f.pdf` (each file gets its own `.<name>-resources/`, so a note
+   and its resources move together) and linked from the `.md` with a relative markdown
+   link `[f.pdf](<.f.pdf-resources/f.pdf>)`.
 
 Resulting layout:
 
 ```
 a/b/c/d/
-  f.pdf.md                 <- OCR text, visible & searchable in Obsidian
+  f.pdf.md                 <- OCR text + embedded page images (visible & searchable)
+  f.pdf-pages/
+    page-1.png             <- rendered page, embedded so you can SEE it in Obsidian
   .f.pdf-resources/
-    f.pdf                  <- original, moved here (hidden from the Obsidian tree)
+    f.pdf                  <- pristine original, moved here (hidden from the tree)
 ```
 
 If the sidecar already exists the file is skipped (use `--force` to regenerate). Once an
-original has been moved into its `.<name>-resources/` folder it lives in a hidden dir, so
-re-runs won't reprocess it.
+original has been moved into its hidden `.<name>-resources/` folder, re-runs won't
+reprocess it.
 
 ## Setup
 

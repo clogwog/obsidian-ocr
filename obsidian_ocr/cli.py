@@ -11,7 +11,7 @@ from typing import List, Optional
 
 from .config import Config, load_config
 from .pdf import render_pages
-from .sidecar import build_markdown, move_to_resource, write_sidecar
+from .sidecar import build_markdown, move_to_resource, write_page_image, write_sidecar
 from .walker import Kind, WorkItem, walk
 
 
@@ -25,23 +25,26 @@ class Stats:
     failed: List[str] = field(default_factory=list)
 
 
-def _ocr_item(item: WorkItem, client, on_page=None) -> List[str]:
-    """Return the list of page texts for an OCR target.
+def _ocr_item(item: WorkItem, client, on_page=None) -> List[tuple]:
+    """OCR an item, returning (image_ext, image_bytes, ocr_text) per page.
 
-    `on_page(page, total)` is called before each page is sent to the model so the
-    caller can show progress (PDFs can take a long time — one model call per page).
+    The image bytes are the rendered page (PDF) or the image file itself, so the caller
+    can save a visible, embeddable copy. `on_page(page, total)` is called before each
+    page is sent to the model so the caller can show progress (one model call per page).
     """
     if item.kind is Kind.IMAGE:
         if on_page:
             on_page(1, 1)
-        return [client.ocr_image(item.path.read_bytes())]
+        data = item.path.read_bytes()
+        ext = item.path.suffix.lower() or ".png"
+        return [(ext, data, client.ocr_image(data))]
     if item.kind is Kind.PDF:
-        texts = []
+        out = []
         for page, total, png in render_pages(item.path):
             if on_page:
                 on_page(page, total)
-            texts.append(client.ocr_image(png))
-        return texts
+            out.append((".png", png, client.ocr_image(png)))
+        return out
     raise ValueError(f"not an OCR target: {item.path}")
 
 
@@ -95,7 +98,12 @@ def process(
 
         _progress(f"… OCR  {rel}")
         try:
-            pages = _ocr_item(item, client, on_page=on_page)
+            results = _ocr_item(item, client, on_page=on_page)
+            # Save a visible, embeddable image per page and pair it with its OCR text.
+            pages = [
+                (write_page_image(item.path, idx, ext, data), text)
+                for idx, (ext, data, text) in enumerate(results, start=1)
+            ]
             write_sidecar(item.sidecar, build_markdown(item.path, pages))
             # Only after the sidecar is safely written, tuck the original away.
             move_to_resource(item.path)

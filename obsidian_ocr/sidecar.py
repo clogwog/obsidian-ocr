@@ -6,15 +6,21 @@ import os
 from pathlib import Path
 from typing import List
 
+from typing import Tuple
+
 from . import __version__
 
 # Each original gets its own per-file folder (sibling of the sidecar), so a note and
 # its resources move together: `f.pdf` -> `.f.pdf-resources/f.pdf`.
 RESOURCE_SUFFIX = "-resources"
+# Rendered page images live in a VISIBLE per-file folder so Obsidian can embed them
+# (it can't embed from the hidden resources folder): `f.pdf` -> `f.pdf-pages/page-1.png`.
+PAGES_SUFFIX = "-pages"
+NO_TEXT_PLACEHOLDER = "_(no text detected)_"
 
 
 def resource_dir_name(source: Path) -> str:
-    """Per-file resource folder name: `.<name>-resources`."""
+    """Per-file resource folder name (hidden): `.<name>-resources`."""
     return f".{source.name}{RESOURCE_SUFFIX}"
 
 
@@ -23,13 +29,18 @@ def resource_ref(source: Path) -> str:
     return f"{resource_dir_name(source)}/{source.name}"
 
 
-def build_markdown(source: Path, pages: List[str]) -> str:
-    """Compose sidecar markdown for a source file given its OCR'd page texts.
+def pages_dir_name(source: Path) -> str:
+    """Per-file rendered-pages folder name (visible): `<name>-pages`."""
+    return f"{source.name}{PAGES_SUFFIX}"
 
-    Images produce a single "page"; PDFs produce one per page.
-    The original is referenced inside a per-file `.resource-<name>/` folder. Obsidian
-    hides dot-folders, so a relative markdown link (angle-bracketed for spaces) is used
-    rather than an `![[ ]]` embed, which would not resolve from a hidden folder.
+
+def build_markdown(source: Path, pages: List[Tuple[str, str]]) -> str:
+    """Compose sidecar markdown given (image_ref, ocr_text) for each page.
+
+    `image_ref` is the relative path to that page's rendered image in the visible
+    `<name>-pages/` folder; it is embedded with `![[ ]]` so the page is always visible
+    in Obsidian even when OCR returns no text. The pristine original is also linked from
+    its hidden `.<name>-resources/` folder.
     """
     generated_by = f"obsidian-ocr {__version__}"
     ref = resource_ref(source)
@@ -45,14 +56,15 @@ def build_markdown(source: Path, pages: List[str]) -> str:
         "",
     ]
 
-    if len(pages) == 1:
-        lines.append(pages[0].strip())
-    else:
-        for index, text in enumerate(pages, start=1):
+    multipage = len(pages) > 1
+    for index, (image_ref, text) in enumerate(pages, start=1):
+        if multipage:
             lines.append(f"## Page {index}")
             lines.append("")
-            lines.append(text.strip())
-            lines.append("")
+        lines.append(f"![[{image_ref}]]")
+        lines.append("")
+        lines.append(text.strip() or NO_TEXT_PLACEHOLDER)
+        lines.append("")
 
     return "\n".join(lines).rstrip() + "\n"
 
@@ -62,6 +74,18 @@ def write_sidecar(sidecar: Path, content: str) -> None:
     tmp = sidecar.with_name(sidecar.name + ".tmp")
     tmp.write_text(content, encoding="utf-8")
     os.replace(tmp, sidecar)
+
+
+def write_page_image(source: Path, index: int, ext: str, data: bytes) -> str:
+    """Write a rendered page image into the visible `<name>-pages/` folder.
+
+    Returns the relative ref (from the sidecar) to embed with `![[ ]]`.
+    """
+    dest_dir = source.parent / pages_dir_name(source)
+    dest_dir.mkdir(exist_ok=True)
+    filename = f"page-{index}{ext}"
+    (dest_dir / filename).write_bytes(data)
+    return f"{pages_dir_name(source)}/{filename}"
 
 
 def move_to_resource(source: Path) -> Path:
