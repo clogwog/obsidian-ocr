@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "obsidian-ocr"
+version = "0.1.0"
+description = "OCR images and PDFs in an Obsidian vault into searchable markdown sidecars using a local LM Studio vision model"
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+dependencies = [
+    "lmstudio>=1.3",
+    "pymupdf>=1.24",
+    "python-dotenv>=1.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0"]
+
+[project.scripts]
+obsidian-ocr = "obsidian_ocr.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["obsidian_ocr*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
