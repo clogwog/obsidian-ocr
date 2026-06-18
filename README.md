@@ -17,8 +17,10 @@ hidden; `f.pdf.md` is not), so its OCR'd text gets indexed.
 **Images** (`a/b/c/d/f.png`):
 
 - OCR the image.
-- If it contains **no text**, the image is **left exactly as it is** — no sidecar is
-  written.
+- If it contains **no usable text** (4 or fewer non-whitespace characters), the image is
+  **left exactly as it is** — no sidecar is written. A hidden, empty `.<name>.notext`
+  marker is dropped next to it so re-runs skip it instead of re-OCRing (the marker is only
+  written when OCR completed without error).
 - If text is found, write `a/b/c/d/f.png.md` containing the OCR text and embedding the
   image **in place** with `![[f.png]]`.
 
@@ -42,7 +44,7 @@ a/b/c/d/
 ```
 
 If a sidecar already exists the file is skipped (use `--force` to regenerate). Text-less
-images get no sidecar, so they are re-checked on every run.
+images get a `.notext` marker (see above) so they are skipped too, not re-OCR'd.
 
 ### Migration from older versions
 

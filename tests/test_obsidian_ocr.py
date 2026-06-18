@@ -213,16 +213,61 @@ def test_end_to_end_image_and_pdf(tmp_path):
     assert not any(p.is_dir() for p in tmp_path.iterdir())
 
 
-def test_image_with_no_text_is_left_untouched(tmp_path):
+def test_image_with_no_text_leaves_marker_and_skips_on_rerun(tmp_path):
     _make_png(tmp_path / "blank.png")
-    client = FakeClient("   ")  # whitespace only -> "no text"
+    client = FakeClient("ab")  # <= 4 chars -> treated as text-less
 
     stats = process(_config(tmp_path), client)
 
     assert stats.no_text == 1
     assert stats.ocred == 0
-    assert not (tmp_path / "blank.png.md").exists()  # no sidecar written
-    assert (tmp_path / "blank.png").exists()         # original untouched
+    assert not (tmp_path / "blank.png.md").exists()      # no sidecar written
+    assert (tmp_path / "blank.png").exists()             # original untouched
+    assert (tmp_path / ".blank.png.notext").exists()     # hidden marker dropped
+
+    # Re-run: the marker makes us skip without calling the model again.
+    again = process(_config(tmp_path), client)
+    assert client.calls == 1                             # not re-OCR'd
+    assert again.skipped_exists == 1
+    assert again.no_text == 0
+
+
+def test_short_text_under_threshold_is_treated_as_no_text(tmp_path):
+    _make_png(tmp_path / "tiny.png")
+    client = FakeClient("1234")  # exactly 4 chars -> not "longer than 4"
+
+    stats = process(_config(tmp_path), client)
+
+    assert stats.no_text == 1
+    assert not (tmp_path / "tiny.png.md").exists()
+    assert (tmp_path / ".tiny.png.notext").exists()
+
+
+def test_text_over_threshold_writes_sidecar_not_marker(tmp_path):
+    _make_png(tmp_path / "doc.png")
+    client = FakeClient("12345")  # 5 chars -> real text
+
+    stats = process(_config(tmp_path), client)
+
+    assert stats.ocred == 1
+    assert (tmp_path / "doc.png.md").exists()
+    assert not (tmp_path / ".doc.png.notext").exists()
+
+
+def test_no_marker_written_when_ocr_errors(tmp_path):
+    _make_png(tmp_path / "boom.png")
+
+    class FailingClient:
+        calls = 0
+
+        def ocr_image(self, image_bytes):
+            raise RuntimeError("model exploded")
+
+    stats = process(_config(tmp_path), FailingClient())
+
+    assert stats.failed == ["boom.png"]
+    assert not (tmp_path / ".boom.png.notext").exists()  # only mark on clean OCR
+    assert stats.no_text == 0
 
 
 def test_dry_run_writes_nothing(tmp_path):

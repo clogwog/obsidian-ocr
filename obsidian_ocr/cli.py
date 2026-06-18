@@ -12,8 +12,17 @@ from typing import List, Optional
 from .config import Config, load_config
 from .migrate import migrate
 from .pdf import render_pages
-from .sidecar import build_image_markdown, build_pdf_markdown, write_sidecar
+from .sidecar import (
+    build_image_markdown,
+    build_pdf_markdown,
+    notext_marker_path,
+    write_notext_marker,
+    write_sidecar,
+)
 from .walker import Kind, WorkItem, walk
+
+# An image whose OCR yields this few non-whitespace characters is treated as text-less.
+MIN_TEXT_CHARS = 4
 
 
 @dataclass
@@ -87,7 +96,12 @@ def process(
             stats.unsupported += 1
             continue
 
-        if item.sidecar.exists() and not force:
+        # Skip if already done: a sidecar exists, or (for an image) a prior run already
+        # found it text-less and left a `.notext` marker.
+        if not force and (
+            item.sidecar.exists()
+            or (item.kind is Kind.IMAGE and notext_marker_path(item.path).exists())
+        ):
             stats.skipped_exists += 1
             continue
 
@@ -108,8 +122,11 @@ def process(
             if item.kind is Kind.IMAGE:
                 on_page(1, 1)
                 text = client.ocr_image(item.path.read_bytes())
-                # No text in the image -> leave it exactly as it is (no sidecar).
-                if not text.strip():
+                # Too little text to be worth a sidecar -> leave the image untouched but
+                # drop a hidden `.notext` marker so we never re-OCR it. Reached only when
+                # ocr_image returned without raising, so the marker means "checked, empty".
+                if len(text.strip()) <= MIN_TEXT_CHARS:
+                    write_notext_marker(item.path)
                     _result(f"·  skip {rel} (no text)")
                     stats.no_text += 1
                     continue

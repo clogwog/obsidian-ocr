@@ -84,3 +84,17 @@ def write_sidecar(sidecar: Path, content: str) -> None:
     tmp = sidecar.with_name(sidecar.name + ".tmp")
     tmp.write_text(content, encoding="utf-8")
     os.replace(tmp, sidecar)
+
+
+def notext_marker_path(source: Path) -> Path:
+    """Hidden marker recording that `source` was OCR'd and had no usable text.
+
+    `a/b/f.png` -> `a/b/.f.png.notext`. Dot-prefixed so Obsidian hides it and the
+    walker skips it; its presence lets re-runs skip re-OCRing a text-less image.
+    """
+    return source.with_name(f".{source.name}.notext")
+
+
+def write_notext_marker(source: Path) -> None:
+    """Create the empty `.notext` marker for `source` (idempotent)."""
+    notext_marker_path(source).touch()
