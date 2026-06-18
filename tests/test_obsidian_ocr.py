@@ -243,6 +243,38 @@ def test_short_text_under_threshold_is_treated_as_no_text(tmp_path):
     assert (tmp_path / ".tiny.png.notext").exists()
 
 
+def test_mixed_directory_some_with_text_some_without(tmp_path):
+    # walk() yields in sorted-path order, so name files to fix the response order.
+    for name in ("a_with.png", "b_blank.png", "c_with.png"):
+        _make_png(tmp_path / name)
+
+    class SequenceClient:
+        def __init__(self, texts):
+            self.texts = list(texts)
+            self.calls = 0
+
+        def ocr_image(self, image_bytes):
+            text = self.texts[self.calls]
+            self.calls += 1
+            return text
+
+    client = SequenceClient(["hello world", "", "more text here"])
+
+    stats = process(_config(tmp_path), client)
+
+    assert client.calls == 3
+    assert stats.ocred == 2
+    assert stats.no_text == 1
+    # Each file gets its own independent outcome.
+    assert (tmp_path / "a_with.png.md").exists()
+    assert not (tmp_path / ".a_with.png.notext").exists()
+    assert (tmp_path / ".b_blank.png.notext").exists()
+    assert not (tmp_path / "b_blank.png.md").exists()
+    assert (tmp_path / "c_with.png.md").exists()
+    assert "hello world" in (tmp_path / "a_with.png.md").read_text()
+    assert "more text here" in (tmp_path / "c_with.png.md").read_text()
+
+
 def test_text_over_threshold_writes_sidecar_not_marker(tmp_path):
     _make_png(tmp_path / "doc.png")
     client = FakeClient("12345")  # 5 chars -> real text
