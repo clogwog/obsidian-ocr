@@ -10,36 +10,48 @@ next to it containing the OCR'd text — so Obsidian indexes and finds it.
 
 ## How sidecars work
 
-For `a/b/c/d/f.pdf`:
+Originals are **never moved** — the tool only writes a `<name>.md` sidecar next to each
+file. The `.md` is a visible, Obsidian-searchable sibling (only dot-*prefixed* paths are
+hidden; `f.pdf.md` is not), so its OCR'd text gets indexed.
 
-1. **OCR text** is written to `a/b/c/d/f.pdf.md` — a **visible** markdown file (Obsidian
-   hides dot-prefixed paths, so the `.md` itself is never dot-prefixed; that's what keeps
-   it searchable). PDFs get one `## Page N` section per page; pages with no detected text
-   show a `_(no text detected)_` placeholder.
-2. **Rendered page images** are saved into a **visible** per-file folder
-   `a/b/c/d/f.pdf-pages/page-1.png`, ... and embedded in the `.md` with `![[ ]]`. This is
-   what lets you *see* the content in Obsidian — even for scanned, text-less PDFs.
-   (Obsidian **cannot embed from a dot-folder**, which is why the page images go in a
-   non-dot folder.)
-3. **The pristine original** is moved into a per-file hidden folder
-   `a/b/c/d/.f.pdf-resources/f.pdf` (each file gets its own `.<name>-resources/`, so a note
-   and its resources move together) and linked from the `.md` with a relative markdown
-   link `[f.pdf](<.f.pdf-resources/f.pdf>)`.
+**Images** (`a/b/c/d/f.png`):
+
+- OCR the image.
+- If it contains **no text**, the image is **left exactly as it is** — no sidecar is
+  written.
+- If text is found, write `a/b/c/d/f.png.md` containing the OCR text and embedding the
+  image **in place** with `![[f.png]]`.
+
+**PDFs** (`a/b/c/d/f.pdf`):
+
+- Render each page to an image and OCR it (the rendered images are transient — only the
+  text is kept).
+- Write a single `a/b/c/d/f.pdf.md` with one `## Page N` section per page (pages with no
+  detected text show a `_(no text detected)_` placeholder) and a link back to the
+  original: `[f.pdf](<f.pdf>)`.
+- The PDF is left where it is.
 
 Resulting layout:
 
 ```
 a/b/c/d/
-  f.pdf.md                 <- OCR text + embedded page images (visible & searchable)
-  f.pdf-pages/
-    page-1.png             <- rendered page, embedded so you can SEE it in Obsidian
-  .f.pdf-resources/
-    f.pdf                  <- pristine original, moved here (hidden from the tree)
+  f.png        <- original image, untouched
+  f.png.md     <- OCR text + embedded image (only if the image had text)
+  f.pdf        <- original PDF, untouched
+  f.pdf.md     <- per-page OCR text + link to f.pdf
 ```
 
-If the sidecar already exists the file is skipped (use `--force` to regenerate). Once an
-original has been moved into its hidden `.<name>-resources/` folder, re-runs won't
-reprocess it.
+If a sidecar already exists the file is skipped (use `--force` to regenerate). Text-less
+images get no sidecar, so they are re-checked on every run.
+
+### Migration from older versions
+
+An earlier version *moved* originals into hidden `.<name>-resources/` folders and wrote
+rendered pages into `<name>-pages/` folders. On startup the tool automatically reconciles
+any such leftovers: it moves each original back into place, deletes the `-pages/` folder,
+and removes the stale old-format sidecar so the file is reprocessed normally in the same
+run. This is keyed on the `.<name>-resources/` folder, so once migrated a file is never
+touched again. `--dry-run` reports what migration would do without changing anything.
 
 ## Setup
 
@@ -82,7 +94,8 @@ obsidian-ocr --dry-run       # show what would be done, write nothing
 obsidian-ocr --force         # regenerate even if a sidecar exists
 ```
 
-An overview is printed at the end (scanned / OCR'd / skipped / unsupported / failed).
+An overview is printed at the end (scanned / OCR'd / skipped / no-text / ignored /
+unsupported / failed).
 
 ## Tests
 

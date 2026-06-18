@@ -55,11 +55,31 @@ def walk(base_dir: Path) -> Iterator[WorkItem]:
     """Yield a WorkItem for every relevant file under base_dir.
 
     Dot-prefixed directories (e.g. `.obsidian`, `.git`) are skipped.
+
+    Raises PermissionError with a clear hint if the root can't be read — on macOS,
+    `~/Documents`, `~/Desktop`, etc. are protected and the terminal app must be granted
+    access (System Settings -> Privacy & Security -> Files and Folders / Full Disk Access).
+    Without this guard the OS denial surfaces as a silent "scanned: 0".
     """
+    try:
+        import os
+
+        os.scandir(base_dir).close()
+    except PermissionError as exc:
+        raise PermissionError(
+            f"Cannot read {base_dir}: {exc.strerror or exc}. On macOS, grant your "
+            f"terminal app access to this folder under System Settings -> Privacy & "
+            f"Security -> Files and Folders (or Full Disk Access), then reopen it."
+        ) from exc
+
     for path in sorted(base_dir.rglob("*")):
         if not path.is_file():
             continue
-        if any(part.startswith(".") for part in path.relative_to(base_dir).parts):
+        rel_parts = path.relative_to(base_dir).parts
+        # Skip dot-dirs (.obsidian, .git, and the old `.\<name>-resources` originals folder)
+        # and leftover `\<name>-pages/` render folders from earlier versions — their
+        # contents are not user files and must never be OCR'd as fresh targets.
+        if any(part.startswith(".") or part.endswith("-pages") for part in rel_parts):
             continue
         if _is_sidecar(path):
             continue

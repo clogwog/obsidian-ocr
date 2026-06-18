@@ -11,7 +11,7 @@ import pytest
 from obsidian_ocr import walker
 from obsidian_ocr.cli import process
 from obsidian_ocr.config import Config
-from obsidian_ocr.sidecar import build_markdown
+from obsidian_ocr.sidecar import build_image_markdown, build_pdf_markdown
 from obsidian_ocr.walker import Kind, sidecar_path
 
 
@@ -98,6 +98,17 @@ def test_walk_skips_dotdirs_and_existing_sidecars(tmp_path):
     assert paths == {"real.png"}  # hidden dir + sidecar excluded
 
 
+def test_walk_skips_leftover_pages_folders(tmp_path):
+    # Leftover render folders from an earlier version must not be re-OCR'd.
+    _make_png(tmp_path / "scan.png")
+    pages = tmp_path / "doc.pdf-pages"
+    pages.mkdir()
+    _make_png(pages / "page-1.png")
+
+    paths = {i.path.name for i in walker.walk(tmp_path)}
+    assert paths == {"scan.png"}  # page-1.png inside the -pages folder is skipped
+
+
 # --- skip-if-exists / force ---------------------------------------------
 
 
@@ -126,6 +137,48 @@ def test_force_regenerates(tmp_path):
     assert "FRESH" in (tmp_path / "img.png.md").read_text()
 
 
+# --- migration from the old "move original" layout ----------------------
+
+
+def test_migrates_old_layout_then_reprocesses(tmp_path):
+    # Recreate the old layout for a/doc.pdf: original moved away, -pages folder, old sidecar.
+    res = tmp_path / ".doc.pdf-resources"
+    res.mkdir()
+    _make_pdf(res / "doc.pdf")
+    pages = tmp_path / "doc.pdf-pages"
+    pages.mkdir()
+    _make_png(pages / "page-1.png")
+    (tmp_path / "doc.pdf.md").write_text("OLD SIDECAR referencing .doc.pdf-resources")
+    client = FakeClient("FRESH")
+
+    stats = process(_config(tmp_path), client)
+
+    # Original restored in place; leftovers gone.
+    assert (tmp_path / "doc.pdf").exists()
+    assert not res.exists()
+    assert not pages.exists()
+    # Sidecar regenerated in the new format (link to in-place original, fresh OCR).
+    md = (tmp_path / "doc.pdf.md").read_text()
+    assert "FRESH" in md
+    assert "[doc.pdf](<doc.pdf>)" in md
+    assert "OLD SIDECAR" not in md
+    assert stats.ocred == 1
+
+
+def test_migration_skips_when_original_already_in_place(tmp_path):
+    # Defensive: never clobber a file that already exists where the original would land.
+    _make_pdf(tmp_path / "doc.pdf")
+    res = tmp_path / ".doc.pdf-resources"
+    res.mkdir()
+    _make_pdf(res / "doc.pdf")
+    (tmp_path / "doc.pdf.md").write_text("existing")
+    client = FakeClient("X")
+
+    process(_config(tmp_path), client)
+
+    assert res.exists()  # left alone rather than overwriting the in-place doc.pdf
+
+
 # --- end to end ----------------------------------------------------------
 
 
@@ -143,25 +196,33 @@ def test_end_to_end_image_and_pdf(tmp_path):
     assert stats.unsupported == 1
     assert not stats.failed
 
+    # Image: sidecar embeds the image IN PLACE and holds the OCR text.
     img_md = (tmp_path / "scan.png.md").read_text()
     assert "HELLO" in img_md
-    assert "![[scan.png-pages/page-1.png]]" in img_md  # visible, embeddable page image
-    assert "(<.scan.png-resources/scan.png>)" in img_md  # link to moved original
+    assert "![[scan.png]]" in img_md
 
+    # PDF: sidecar links to the original PDF and holds the per-page OCR text.
     pdf_md = (tmp_path / "doc.pdf.md").read_text()
     assert "HELLO" in pdf_md
-    assert "![[doc.pdf-pages/page-1.png]]" in pdf_md
-    assert "(<.doc.pdf-resources/doc.pdf>)" in pdf_md
+    assert "[doc.pdf](<doc.pdf>)" in pdf_md
 
-    # Rendered page images land in a VISIBLE (non-dot) folder so Obsidian can embed them.
-    assert (tmp_path / "scan.png-pages" / "page-1.png").exists()
-    assert (tmp_path / "doc.pdf-pages" / "page-1.png").exists()
+    # Originals are left exactly where they are — nothing is moved.
+    assert (tmp_path / "scan.png").exists()
+    assert (tmp_path / "doc.pdf").exists()
+    # No extra page/resource folders are created.
+    assert not any(p.is_dir() for p in tmp_path.iterdir())
 
-    # Each original is moved into its own sibling hidden .<name>-resources folder.
-    assert not (tmp_path / "scan.png").exists()
-    assert (tmp_path / ".scan.png-resources" / "scan.png").exists()
-    assert not (tmp_path / "doc.pdf").exists()
-    assert (tmp_path / ".doc.pdf-resources" / "doc.pdf").exists()
+
+def test_image_with_no_text_is_left_untouched(tmp_path):
+    _make_png(tmp_path / "blank.png")
+    client = FakeClient("   ")  # whitespace only -> "no text"
+
+    stats = process(_config(tmp_path), client)
+
+    assert stats.no_text == 1
+    assert stats.ocred == 0
+    assert not (tmp_path / "blank.png.md").exists()  # no sidecar written
+    assert (tmp_path / "blank.png").exists()         # original untouched
 
 
 def test_dry_run_writes_nothing(tmp_path):
@@ -176,19 +237,24 @@ def test_dry_run_writes_nothing(tmp_path):
 # --- markdown shape ------------------------------------------------------
 
 
-def test_build_markdown_multipage_has_page_headers_and_embeds():
-    md = build_markdown(
-        Path("x/doc.pdf"),
-        [("doc.pdf-pages/page-1.png", "one"), ("doc.pdf-pages/page-2.png", "two")],
-    )
+def test_build_pdf_markdown_multipage_has_page_headers_and_link():
+    md = build_pdf_markdown(Path("x/doc.pdf"), ["one", "two"])
     assert "## Page 1" in md and "## Page 2" in md
-    assert "![[doc.pdf-pages/page-1.png]]" in md
-    assert "![[doc.pdf-pages/page-2.png]]" in md
+    assert "one" in md and "two" in md
     assert md.startswith("---")  # frontmatter
-    assert "source: .doc.pdf-resources/doc.pdf" in md
+    assert "source: doc.pdf" in md
+    assert "[doc.pdf](<doc.pdf>)" in md  # link to the original, in place
 
 
-def test_build_markdown_empty_ocr_gets_placeholder():
-    md = build_markdown(Path("x/scan.png"), [("scan.png-pages/page-1.png", "")])
+def test_build_pdf_markdown_empty_page_gets_placeholder():
+    md = build_pdf_markdown(Path("x/scan.pdf"), [""])
     assert "_(no text detected)_" in md
-    assert "![[scan.png-pages/page-1.png]]" in md  # page still visible
+    assert "[scan.pdf](<scan.pdf>)" in md
+
+
+def test_build_image_markdown_embeds_image_in_place():
+    md = build_image_markdown(Path("x/photo.png"), "some text")
+    assert "![[photo.png]]" in md  # embedded by bare filename (left in place)
+    assert "some text" in md
+    assert "source: photo.png" in md
+    assert "type: image" in md

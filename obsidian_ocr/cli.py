@@ -10,8 +10,9 @@ from pathlib import Path
 from typing import List, Optional
 
 from .config import Config, load_config
+from .migrate import migrate
 from .pdf import render_pages
-from .sidecar import build_markdown, move_to_resource, write_page_image, write_sidecar
+from .sidecar import build_image_markdown, build_pdf_markdown, write_sidecar
 from .walker import Kind, WorkItem, walk
 
 
@@ -20,32 +21,25 @@ class Stats:
     scanned: int = 0
     ocred: int = 0
     skipped_exists: int = 0
+    no_text: int = 0
     ignored: int = 0
     unsupported: int = 0
     failed: List[str] = field(default_factory=list)
 
 
-def _ocr_item(item: WorkItem, client, on_page=None) -> List[tuple]:
-    """OCR an item, returning (image_ext, image_bytes, ocr_text) per page.
+def _ocr_pdf(item: WorkItem, client, on_page=None) -> List[str]:
+    """Render each PDF page to an image, OCR it, and return the text per page.
 
-    The image bytes are the rendered page (PDF) or the image file itself, so the caller
-    can save a visible, embeddable copy. `on_page(page, total)` is called before each
-    page is sent to the model so the caller can show progress (one model call per page).
+    The rendered images are transient — only their OCR text is kept. `on_page(page,
+    total)` is called before each page is sent to the model so the caller can show
+    progress (one model call per page).
     """
-    if item.kind is Kind.IMAGE:
+    texts = []
+    for page, total, png in render_pages(item.path):
         if on_page:
-            on_page(1, 1)
-        data = item.path.read_bytes()
-        ext = item.path.suffix.lower() or ".png"
-        return [(ext, data, client.ocr_image(data))]
-    if item.kind is Kind.PDF:
-        out = []
-        for page, total, png in render_pages(item.path):
-            if on_page:
-                on_page(page, total)
-            out.append((".png", png, client.ocr_image(png)))
-        return out
-    raise ValueError(f"not an OCR target: {item.path}")
+            on_page(page, total)
+        texts.append(client.ocr_image(png))
+    return texts
 
 
 def _progress(msg: str) -> None:
@@ -70,6 +64,19 @@ def process(
 ) -> Stats:
     """Walk the vault and OCR every image/PDF lacking a sidecar."""
     stats = Stats()
+
+    # Reconcile any leftovers from the old "move original" layout before scanning, so
+    # restored files get processed in the same run.
+    mig = migrate(config.base_dir, dry_run=dry_run)
+    if mig.restored or mig.pages_removed or mig.sidecars_removed:
+        print(
+            f"Migrated old layout: restored {mig.restored} original(s), "
+            f"removed {mig.pages_removed} -pages folder(s) and "
+            f"{mig.sidecars_removed} stale sidecar(s)."
+        )
+    for warning in mig.warnings:
+        print(f"  ! {warning}")
+
     for item in walk(config.base_dir):
         stats.scanned += 1
 
@@ -98,15 +105,18 @@ def process(
 
         _progress(f"… OCR  {rel}")
         try:
-            results = _ocr_item(item, client, on_page=on_page)
-            # Save a visible, embeddable image per page and pair it with its OCR text.
-            pages = [
-                (write_page_image(item.path, idx, ext, data), text)
-                for idx, (ext, data, text) in enumerate(results, start=1)
-            ]
-            write_sidecar(item.sidecar, build_markdown(item.path, pages))
-            # Only after the sidecar is safely written, tuck the original away.
-            move_to_resource(item.path)
+            if item.kind is Kind.IMAGE:
+                on_page(1, 1)
+                text = client.ocr_image(item.path.read_bytes())
+                # No text in the image -> leave it exactly as it is (no sidecar).
+                if not text.strip():
+                    _result(f"·  skip {rel} (no text)")
+                    stats.no_text += 1
+                    continue
+                write_sidecar(item.sidecar, build_image_markdown(item.path, text))
+            else:  # Kind.PDF -- always write one sidecar, leave the PDF in place.
+                page_texts = _ocr_pdf(item, client, on_page=on_page)
+                write_sidecar(item.sidecar, build_pdf_markdown(item.path, page_texts))
             _result(f"✓ OCR  {rel} -> {item.sidecar.name}")
             stats.ocred += 1
         except Exception as exc:  # one bad file must not abort the run
@@ -121,6 +131,7 @@ def print_overview(stats: Stats, elapsed: float) -> None:
     print(f"  scanned:        {stats.scanned}")
     print(f"  OCR'd:          {stats.ocred}")
     print(f"  skipped (done): {stats.skipped_exists}")
+    print(f"  no text (left): {stats.no_text}")
     print(f"  ignored (text): {stats.ignored}")
     print(f"  unsupported:    {stats.unsupported}")
     print(f"  failed:         {len(stats.failed)}")
@@ -161,7 +172,11 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     print(f"Scanning {config.base_dir} (model={config.lmstudio_model})")
     start = time.monotonic()
-    stats = process(config, client, force=args.force, dry_run=args.dry_run)
+    try:
+        stats = process(config, client, force=args.force, dry_run=args.dry_run)
+    except PermissionError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
     print_overview(stats, time.monotonic() - start)
     return 1 if stats.failed else 0
 
