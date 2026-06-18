@@ -125,6 +125,19 @@ def test_skips_when_sidecar_exists(tmp_path):
     assert (tmp_path / "img.png.md").read_text() == "already done"
 
 
+def test_skips_pdf_when_sidecar_exists(tmp_path):
+    _make_pdf(tmp_path / "doc.pdf")
+    (tmp_path / "doc.pdf.md").write_text("already done")
+    client = FakeClient()
+
+    stats = process(_config(tmp_path), client)
+
+    assert client.calls == 0          # PDF not re-rendered or re-OCR'd
+    assert stats.skipped_exists == 1
+    assert stats.ocred == 0
+    assert (tmp_path / "doc.pdf.md").read_text() == "already done"
+
+
 def test_force_regenerates(tmp_path):
     _make_png(tmp_path / "img.png")
     (tmp_path / "img.png.md").write_text("stale")
