@@ -57,8 +57,24 @@ def _make_pdf(path: Path) -> None:
     doc.close()
 
 
+def _make_text_pdf(path: Path, text: str) -> None:
+    """A PDF whose page carries an embedded text layer (like an already-OCR'd scan)."""
+    import fitz
+
+    doc = fitz.open()
+    page = doc.new_page()
+    page.insert_text((72, 72), text)
+    doc.save(path)
+    doc.close()
+
+
 def _config(base: Path) -> Config:
-    return Config(base_dir=base, lmstudio_host="localhost:1234", lmstudio_model="m")
+    return Config(
+        base_dir=base,
+        lmstudio_host="localhost:1234",
+        lmstudio_model="m",
+        lmstudio_max_tokens=4096,
+    )
 
 
 # --- sidecar path derivation --------------------------------------------
@@ -190,6 +206,35 @@ def test_migration_skips_when_original_already_in_place(tmp_path):
     process(_config(tmp_path), client)
 
     assert res.exists()  # left alone rather than overwriting the in-place doc.pdf
+
+
+# --- embedded PDF text layer --------------------------------------------
+
+
+def test_pdf_uses_embedded_text_layer_instead_of_ocr(tmp_path):
+    _make_text_pdf(tmp_path / "scanned.pdf", "Invoice total is 12345 dollars")
+
+    class NoOcrClient:
+        def ocr_image(self, image_bytes):
+            raise AssertionError("must not OCR a page that has an embedded text layer")
+
+    stats = process(_config(tmp_path), NoOcrClient())
+
+    assert stats.ocred == 1
+    assert stats.embedded_pages == 1
+    md = (tmp_path / "scanned.pdf.md").read_text()
+    assert "Invoice total is 12345 dollars" in md
+
+
+def test_pdf_without_text_layer_falls_back_to_ocr(tmp_path):
+    _make_pdf(tmp_path / "blank.pdf")  # no text layer -> rendered + OCR'd
+    client = FakeClient("OCR FALLBACK TEXT")
+
+    stats = process(_config(tmp_path), client)
+
+    assert client.calls == 1
+    assert stats.embedded_pages == 0
+    assert "OCR FALLBACK TEXT" in (tmp_path / "blank.pdf.md").read_text()
 
 
 # --- end to end ----------------------------------------------------------

@@ -26,8 +26,11 @@ hidden; `f.pdf.md` is not), so its OCR'd text gets indexed.
 
 **PDFs** (`a/b/c/d/f.pdf`):
 
-- Render each page to an image and OCR it (the rendered images are transient — only the
-  text is kept).
+- For each page, if it already has an **embedded text layer** (a born-digital PDF, or one
+  already OCR'd by an app like Scanner Pro), that text is used directly — exact and
+  instant, no model call.
+- Only pages with no usable text layer are rendered to an image and OCR'd (the rendered
+  images are transient — only the text is kept).
 - Write a single `a/b/c/d/f.pdf.md` with one `## Page N` section per page (pages with no
   detected text show a `_(no text detected)_` placeholder) and a link back to the
   original: `[f.pdf](<f.pdf>)`.
@@ -84,6 +87,7 @@ safe to publish.
 | `OBSIDIAN_BASE_DIR` | _(required if no CLI arg)_ | Root directory to scan |
 | `LMSTUDIO_HOST` | `localhost:1234` | LM Studio server `host:port` (lmstudio SDK) |
 | `LMSTUDIO_MODEL` | `qwen/qwen3-vl-8b` | Vision model name |
+| `LMSTUDIO_MAX_TOKENS` | `4096` | Max tokens generated per image/page (caps runaway generation) |
 
 ## Usage
 

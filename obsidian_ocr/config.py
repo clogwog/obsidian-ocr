@@ -16,6 +16,9 @@ except ImportError:  # python-dotenv is optional
 
 DEFAULT_HOST = "localhost:1234"
 DEFAULT_MODEL = "qwen/qwen3-vl-8b"
+# Hard ceiling on tokens generated per image/page, so a runaway generation can't hang the
+# run. Generous enough for a dense full page; raise via LMSTUDIO_MAX_TOKENS if needed.
+DEFAULT_MAX_TOKENS = 4096
 
 
 @dataclass
@@ -25,6 +28,7 @@ class Config:
     base_dir: Path
     lmstudio_host: str
     lmstudio_model: str
+    lmstudio_max_tokens: int
 
 
 def load_config(cli_root: Optional[str] = None) -> Config:
@@ -45,8 +49,14 @@ def load_config(cli_root: Optional[str] = None) -> Config:
     if not base_dir.is_dir():
         raise ValueError(f"Scan root is not a directory: {base_dir}")
 
+    try:
+        max_tokens = int(os.environ.get("LMSTUDIO_MAX_TOKENS", DEFAULT_MAX_TOKENS))
+    except ValueError:
+        raise ValueError("LMSTUDIO_MAX_TOKENS must be an integer.")
+
     return Config(
         base_dir=base_dir,
         lmstudio_host=os.environ.get("LMSTUDIO_HOST", DEFAULT_HOST),
         lmstudio_model=os.environ.get("LMSTUDIO_MODEL", DEFAULT_MODEL),
+        lmstudio_max_tokens=max_tokens,
     )

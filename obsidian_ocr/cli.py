@@ -11,7 +11,7 @@ from typing import List, Optional
 
 from .config import Config, load_config
 from .migrate import migrate
-from .pdf import render_pages
+from .pdf import iter_pages
 from .sidecar import (
     build_image_markdown,
     build_pdf_markdown,
@@ -31,24 +31,31 @@ class Stats:
     ocred: int = 0
     skipped_exists: int = 0
     no_text: int = 0
+    embedded_pages: int = 0  # PDF pages taken from an existing text layer (no OCR)
     ignored: int = 0
     unsupported: int = 0
     failed: List[str] = field(default_factory=list)
 
 
-def _ocr_pdf(item: WorkItem, client, on_page=None) -> List[str]:
-    """Render each PDF page to an image, OCR it, and return the text per page.
+def _ocr_pdf(item: WorkItem, client, min_text_chars: int, on_page=None):
+    """Return (per-page text, embedded_page_count) for a PDF.
 
-    The rendered images are transient — only their OCR text is kept. `on_page(page,
-    total)` is called before each page is sent to the model so the caller can show
-    progress (one model call per page).
+    Each page prefers its embedded text layer (exact, free); only pages without one are
+    rendered and OCR'd. `on_page(page, total, embedded)` is called per page so the caller
+    can show progress and note which pages skipped the model.
     """
     texts = []
-    for page, total, png in render_pages(item.path):
+    embedded = 0
+    for page in iter_pages(item.path, min_text_chars=min_text_chars):
+        is_embedded = page.text is not None
         if on_page:
-            on_page(page, total)
-        texts.append(client.ocr_image(png))
-    return texts
+            on_page(page.number, page.total, is_embedded)
+        if is_embedded:
+            texts.append(page.text)
+            embedded += 1
+        else:
+            texts.append(client.ocr_image(page.image_png))
+    return texts, embedded
 
 
 def _progress(msg: str) -> None:
@@ -112,10 +119,12 @@ def process(
             continue
 
         # Feedback: announce the file, then overwrite the same line with the result.
-        # PDFs report per-page progress since each page is a separate model call.
-        def on_page(page, total, _rel=rel):
-            suffix = f" (page {page}/{total})" if total > 1 else ""
-            _progress(f"… OCR  {_rel}{suffix}")
+        # PDFs report per-page progress; pages taken from an embedded text layer skip
+        # the model, so we mark them so the user can see why a run is fast.
+        def on_page(page, total, embedded=False, _rel=rel):
+            page_note = f" (page {page}/{total})" if total > 1 else ""
+            src = " [text layer]" if embedded else ""
+            _progress(f"… OCR  {_rel}{page_note}{src}")
 
         _progress(f"… OCR  {rel}")
         try:
@@ -132,7 +141,10 @@ def process(
                     continue
                 write_sidecar(item.sidecar, build_image_markdown(item.path, text))
             else:  # Kind.PDF -- always write one sidecar, leave the PDF in place.
-                page_texts = _ocr_pdf(item, client, on_page=on_page)
+                page_texts, embedded = _ocr_pdf(
+                    item, client, MIN_TEXT_CHARS, on_page=on_page
+                )
+                stats.embedded_pages += embedded
                 write_sidecar(item.sidecar, build_pdf_markdown(item.path, page_texts))
             _result(f"✓ OCR  {rel} -> {item.sidecar.name}")
             stats.ocred += 1
@@ -147,6 +159,7 @@ def print_overview(stats: Stats, elapsed: float) -> None:
     print("\n=== obsidian-ocr overview ===")
     print(f"  scanned:        {stats.scanned}")
     print(f"  OCR'd:          {stats.ocred}")
+    print(f"  PDF pages w/text layer (no OCR): {stats.embedded_pages}")
     print(f"  skipped (done): {stats.skipped_exists}")
     print(f"  no text (left): {stats.no_text}")
     print(f"  ignored (text): {stats.ignored}")
@@ -185,7 +198,11 @@ def main(argv: Optional[List[str]] = None) -> int:
     if not args.dry_run:
         from .lmstudio import OcrClient
 
-        client = OcrClient(config.lmstudio_host, config.lmstudio_model)
+        client = OcrClient(
+            config.lmstudio_host,
+            config.lmstudio_model,
+            max_tokens=config.lmstudio_max_tokens,
+        )
 
     print(f"Scanning {config.base_dir} (model={config.lmstudio_model})")
     start = time.monotonic()
